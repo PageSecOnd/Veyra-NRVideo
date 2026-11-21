@@ -1,11 +1,11 @@
 #include "veyra/gfx/FsrSrBackend.h"
+#include "veyra/gfx/FsrProviderSelection.h"
 
 #include "veyra/Log.h"
 #include "veyra/RuntimePaths.h"
 
 #include <filesystem>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #ifdef VEYRA_HAS_FSR
@@ -138,7 +138,7 @@ bool FsrSrBackend::initialize(ID3D12Device* device, uint32_t maxRenderWidth, uin
         return false;
     }
     uint64_t selectedProvider = 0;
-    std::string selectedFamily = preferMl ? "4." : "3.1.";
+    std::string_view selectedFamily;
     {
         ffxQueryDescGetVersions versions{};
         versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
@@ -161,26 +161,17 @@ bool FsrSrBackend::initialize(ID3D12Device* device, uint32_t maxRenderWidth, uin
                                               returnName(listResult), count, ids.size()));
             return false;
         }
-        const auto choose = [&](std::string_view family) {
-            for (size_t i = 0; i < size_t(count); ++i) {
-                const std::string_view name = names[i] ? names[i] : "unknown";
-                log::info("fsr-sr", std::format("inventory id=0x{:X} name={} request={}", ids[i], name, family));
-                if (!selectedProvider && name.find(family) != std::string_view::npos) {
-                    selectedProvider = ids[i];
-                    p.providerVersion = std::string(name);
-                }
-            }
-        };
-        choose(selectedFamily);
-        if (!selectedProvider && preferMl) {
-            selectedFamily = "3.1.";
+        for (size_t i = 0; i < size_t(count); ++i)
+            log::info("fsr-sr", std::format("inventory id=0x{:X} name={}", ids[i], names[i] ? names[i] : "unknown"));
+        const auto selection=selectFsrUpscalerProvider({names.data(),names.size()},preferMl);
+        if (selection.fellBack)
             log::warn("fsr-sr", "FSR 4 ML provider unavailable on this adapter; explicitly falling back to FSR 3.1");
-            choose(selectedFamily);
-        }
-        if (!selectedProvider) {
-            log::error("fsr-sr", std::format("requested FSR {} provider unavailable; no compatible fallback", selectedFamily));
+        if (!selection) {
+            log::error("fsr-sr", std::format("requested FSR {} provider unavailable; no compatible fallback", preferMl?"4.x/3.1":"3.1"));
             return false;
         }
+        selectedProvider=ids[selection.index];selectedFamily=selection.family;
+        p.providerVersion=names[selection.index]?names[selection.index]:"unknown";
         log::info("fsr-sr", std::format("providers count={} selected={} id=0x{:X}", count,
                                         p.providerVersion, selectedProvider));
     }
