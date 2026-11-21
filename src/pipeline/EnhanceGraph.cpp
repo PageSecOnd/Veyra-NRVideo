@@ -1512,9 +1512,12 @@ bool EnhanceGraph::initFsrSr()
     // the final pass renders the reduced first result, the first pass the source.
     const bool finalFsr=desc_.finalSrQuality()==engine::kVideoSrFsr,firstFsr=desc_.firstSrRuns(engine::kVideoSrFsr);
     const uint32_t renderW=desc_.dualSr?srInW_:srcW_,renderH=desc_.dualSr?srInH_:srcH_;
+    const auto& adapter=context_.adapter();
+    const bool preferMl=adapter.vendorId==0x1002&&
+        (adapter.description.find(L"RX 90")!=std::wstring::npos||adapter.description.find(L"rx 90")!=std::wstring::npos);
     const auto create=[&](std::unique_ptr<gfx::FsrSrBackend>& backend,uint32_t inW,uint32_t inH,uint32_t outW,uint32_t outH,const char* pass){
         backend=std::make_unique<gfx::FsrSrBackend>();
-        if(!backend->initialize(context_.device(),inW,inH,outW,outH,hdr)){
+        if(!backend->initialize(context_.device(),inW,inH,outW,outH,hdr,preferMl)){
             backend.reset();
             // The engine checks fsrSrRequested() && !fsrSrEnabled() after the graph
             // is created and disables the stage with a user-visible warning, so a

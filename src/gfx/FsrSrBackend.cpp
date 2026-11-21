@@ -5,6 +5,8 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #ifdef VEYRA_HAS_FSR
 #include <ffx_api_loader.h>
@@ -106,7 +108,7 @@ FsrSrBackend::FsrSrBackend() : p_(std::make_unique<Impl>()) {}
 FsrSrBackend::~FsrSrBackend() { release(); }
 
 bool FsrSrBackend::initialize(ID3D12Device* device, uint32_t maxRenderWidth, uint32_t maxRenderHeight,
-                              uint32_t maxUpscaleWidth, uint32_t maxUpscaleHeight, bool hdr) {
+                              uint32_t maxUpscaleWidth, uint32_t maxUpscaleHeight, bool hdr, bool preferMl) {
 #ifdef VEYRA_HAS_FSR
     auto& p = *p_;
     if (p.available) return true;
@@ -135,6 +137,8 @@ bool FsrSrBackend::initialize(ID3D12Device* device, uint32_t maxRenderWidth, uin
         log::error("fsr-sr", "loader is missing the FidelityFX API entry points");
         return false;
     }
+    uint64_t selectedProvider = 0;
+    std::string selectedFamily = preferMl ? "4." : "3.1.";
     {
         ffxQueryDescGetVersions versions{};
         versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
@@ -143,27 +147,54 @@ bool FsrSrBackend::initialize(ID3D12Device* device, uint32_t maxRenderWidth, uin
         uint64_t count = 0;
         versions.outputCount = &count;
         const auto countResult = p.functions.Query(nullptr, &versions.header);
-        uint64_t ids[8]{};
-        const char* names[8]{};
-        uint64_t capacity = 8;
-        versions.outputCount = &capacity;
-        versions.versionIds = ids;
-        versions.versionNames = names;
-        const auto listResult = countResult == FFX_API_RETURN_OK
-            ? p.functions.Query(nullptr, &versions.header) : countResult;
-        if (listResult == FFX_API_RETURN_OK && capacity > 0 && names[0] != nullptr) {
-            p.providerVersion = names[0];
+        if (countResult != FFX_API_RETURN_OK || count == 0 || count > 64) {
+            log::error("fsr-sr", std::format("provider inventory result={} count={}", returnName(countResult), count));
+            return false;
         }
-        log::info("fsr-sr", std::format("providers count={} selected={}", capacity,
-                                        p.providerVersion.empty() ? "none" : p.providerVersion));
+        std::vector<uint64_t> ids(size_t(count), 0);
+        std::vector<const char*> names(size_t(count), nullptr);
+        versions.versionIds = ids.data();
+        versions.versionNames = names.data();
+        const auto listResult = p.functions.Query(nullptr, &versions.header);
+        if (listResult != FFX_API_RETURN_OK || count > ids.size()) {
+            log::error("fsr-sr", std::format("provider inventory read result={} count={} capacity={}",
+                                              returnName(listResult), count, ids.size()));
+            return false;
+        }
+        const auto choose = [&](std::string_view family) {
+            for (size_t i = 0; i < size_t(count); ++i) {
+                const std::string_view name = names[i] ? names[i] : "unknown";
+                log::info("fsr-sr", std::format("inventory id=0x{:X} name={} request={}", ids[i], name, family));
+                if (!selectedProvider && name.find(family) != std::string_view::npos) {
+                    selectedProvider = ids[i];
+                    p.providerVersion = std::string(name);
+                }
+            }
+        };
+        choose(selectedFamily);
+        if (!selectedProvider && preferMl) {
+            selectedFamily = "3.1.";
+            log::warn("fsr-sr", "FSR 4 ML provider unavailable on this adapter; explicitly falling back to FSR 3.1");
+            choose(selectedFamily);
+        }
+        if (!selectedProvider) {
+            log::error("fsr-sr", std::format("requested FSR {} provider unavailable; no compatible fallback", selectedFamily));
+            return false;
+        }
+        log::info("fsr-sr", std::format("providers count={} selected={} id=0x{:X}", count,
+                                        p.providerVersion, selectedProvider));
     }
 
+    ffxOverrideVersion overrideVersion{};
+    overrideVersion.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
+    overrideVersion.versionId = selectedProvider;
     ffxCreateBackendDX12Desc backendDesc{};
     backendDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
     backendDesc.device = device;
     ffxCreateContextDescUpscaleVersion versionDesc{};
     versionDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
     versionDesc.version = FFX_UPSCALER_VERSION;
+    versionDesc.header.pNext = &overrideVersion.header;
     ffxCreateContextDescUpscale upscaleDesc{};
     upscaleDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
     upscaleDesc.header.pNext = &backendDesc.header;
@@ -181,7 +212,10 @@ bool FsrSrBackend::initialize(ID3D12Device* device, uint32_t maxRenderWidth, uin
             if(cleanup!=FFX_API_RETURN_OK){log::error("fsr-sr","cannot release partial context");return false;}
             p.context=nullptr;
         }
-        backendDesc.header.pNext = nullptr;
+        // Old providers may reject the API-version descriptor. Keep the
+        // explicit algorithm override so a retry cannot silently become 3.1
+        // while the UI/log says FSR 4 (or vice versa).
+        backendDesc.header.pNext = &overrideVersion.header;
         result = p.functions.CreateContext(&p.context, &upscaleDesc.header, nullptr);
     }
     if (result != FFX_API_RETURN_OK || p.context == nullptr) {
@@ -189,6 +223,19 @@ bool FsrSrBackend::initialize(ID3D12Device* device, uint32_t maxRenderWidth, uin
                                          unsigned(result)));
         return false;
     }
+    ffxQueryGetProviderVersion actual{};
+    actual.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+    const auto queryResult = p.functions.Query(&p.context, &actual.header);
+    const std::string actualName = actual.versionName ? actual.versionName : "unknown";
+    if (queryResult != FFX_API_RETURN_OK || actual.versionId != selectedProvider ||
+        actualName.find(selectedFamily) == std::string::npos) {
+        log::error("fsr-sr", std::format("actual provider rejected query={} requested=0x{:X} actual=0x{:X} name={}",
+                                          returnName(queryResult), selectedProvider, actual.versionId, actualName));
+        p.functions.DestroyContext(&p.context, nullptr);
+        p.context = nullptr;
+        return false;
+    }
+    p.providerVersion = actualName;
     p.maxRenderWidth = maxRenderWidth;
     p.maxRenderHeight = maxRenderHeight;
     p.maxUpscaleWidth = maxUpscaleWidth;
@@ -199,7 +246,7 @@ bool FsrSrBackend::initialize(ID3D12Device* device, uint32_t maxRenderWidth, uin
                                     maxRenderWidth, maxRenderHeight, maxUpscaleWidth, maxUpscaleHeight, hdr));
     return true;
 #else
-    (void)device; (void)maxRenderWidth; (void)maxRenderHeight; (void)maxUpscaleWidth; (void)maxUpscaleHeight; (void)hdr;
+    (void)device; (void)maxRenderWidth; (void)maxRenderHeight; (void)maxUpscaleWidth; (void)maxUpscaleHeight; (void)hdr; (void)preferMl;
     log::error("fsr-sr", "AMD FidelityFX SDK headers were unavailable at build time");
     return false;
 #endif
