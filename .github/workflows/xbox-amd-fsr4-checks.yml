@@ -1,0 +1,73 @@
+name: Xbox AMD FSR 4 checks
+
+on:
+  push:
+    branches: ['codex/xbox-amd-fsr4-*']
+    paths:
+      - '.github/workflows/xbox-amd-fsr4-checks.yml'
+      - 'cmake/VeyraXbox.cmake'
+      - 'include/veyra/gfx/FsrProviderSelection.h'
+      - 'include/veyra/gfx/FsrSrBackend.h'
+      - 'include/veyra/xbox/**'
+      - 'scripts/build-ui-migration.cmd'
+      - 'src/gfx/FsrSrBackend.cpp'
+      - 'src/pipeline/EnhanceGraph.cpp'
+      - 'src/xbox/**'
+      - 'tests/xbox/**'
+      - 'tests/xbox-ci/**'
+      - 'CMakeLists.txt'
+  pull_request:
+    paths:
+      - '.github/workflows/xbox-amd-fsr4-checks.yml'
+      - 'cmake/VeyraXbox.cmake'
+      - 'include/veyra/gfx/**'
+      - 'include/veyra/xbox/**'
+      - 'src/gfx/FsrSrBackend.cpp'
+      - 'src/pipeline/EnhanceGraph.cpp'
+      - 'src/xbox/**'
+      - 'tests/xbox/**'
+      - 'tests/xbox-ci/**'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xbox-amd-fsr4-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-contracts:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+      - name: Select the manifest vcpkg baseline
+        shell: pwsh
+        run: |
+          git -C $env:VCPKG_INSTALLATION_ROOT fetch --depth 1 origin 30ef65cad98f08e7197c9a1656fbd871bcb72f2d
+          git -C $env:VCPKG_INSTALLATION_ROOT checkout --detach 30ef65cad98f08e7197c9a1656fbd871bcb72f2d
+          & "$env:VCPKG_INSTALLATION_ROOT/bootstrap-vcpkg.bat" -disableMetrics
+      - name: Install Xbox protocol dependencies
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install `
+            --triplet x64-windows-static `
+            --x-manifest-root="$pwd/tests/xbox-ci" `
+            --x-install-root="$pwd/out/xbox-vcpkg"
+      - name: Configure focused native targets
+        shell: pwsh
+        run: |
+          cmake -S tests/xbox-ci -B out/xbox-ci -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DVCPKG_INSTALLED_DIR="$pwd/out/xbox-vcpkg"
+      - name: Compile production Xbox core and FSR policy
+        run: cmake --build out/xbox-ci --config Release --parallel 2
+      - name: Run native loopback and provider-selection tests
+        run: ctest --test-dir out/xbox-ci -C Release --output-on-failure --timeout 180
+      - name: Verify product build contracts
+        run: python -X utf8 -B tests/xbox-ci/BuildContractTests.py

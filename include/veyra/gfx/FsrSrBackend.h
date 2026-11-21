@@ -30,8 +30,10 @@ public:
 
     // maxRender* is the largest render (source) extent, maxUpscale* the largest
     // output extent. hdr selects the high-dynamic-range input contract.
+    // preferMl requests the FSR 4.x ML provider and falls back explicitly to
+    // FSR 3.1 when the adapter/driver does not enumerate it.
     bool initialize(ID3D12Device* device, uint32_t maxRenderWidth, uint32_t maxRenderHeight,
-                    uint32_t maxUpscaleWidth, uint32_t maxUpscaleHeight, bool hdr);
+                    uint32_t maxUpscaleWidth, uint32_t maxUpscaleHeight, bool hdr, bool preferMl = false);
 
     // Records the upscale on the caller's command list. Resources must be in
     // the state declared here (color/motion/depth readable by compute, output
