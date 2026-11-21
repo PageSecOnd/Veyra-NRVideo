@@ -17,7 +17,13 @@
 - Xbox/CMake/FSR provider 静态契约检查：通过。
 - `python3 -m py_compile scripts/package-qml-release.py scripts/package-windows-installer.py`：通过。
 - `python3 scripts/acceptance/test-qml-release-package.py`：10/10 通过；测试生成的临时目录已删除。
+- GitHub Windows 2022 / MSVC 聚焦 CI：生产 `Account`、`StreamApi`、`WebRtcSession` 与 HTTPS 实现编译、链接通过。
+- WebRTC 本地 loopback 与 FSR provider 选择测试：通过；RX 9000 请求 4.x，未找到或创建结果不符时回退 3.1。
+- 产品构建合同检查：通过；完整 QML 入口同时开启 Remote Play、Moonlight 与 Xbox。
+- 同一提交的 Linux OBS filter checks：通过。
+
+Windows 首轮检查暴露 `libdatachannel` 只启用默认 WebSocket、未编入媒体处理器。聚焦 CI 清单现显式使用 `libdatachannel[srtp]`；该端口以 `srtp` feature 关闭 `NO_MEDIA`，修复后 MSVC 与测试全部通过。失败记录保留为 GitHub Actions run `44893338200`，成功记录为 run `44894075301`。
 
 ## 未验证边界
 
-本轮遵守当前仓库“先不构建”的任务规则，且执行环境不是 Windows/RX 9070 XT，因此没有声称完成 MSVC、D3D12、AMD 驱动 provider 或真实 Xbox 串流验收。下一步应在目标机器新建隔离构建目录，确认日志依次出现 Xbox active、FidelityFX optical flow、`fsr-sr provider=4.*` 与 `fsr-fg provider=4.0.*`；若驱动只枚举 3.1，日志必须明确记录回退。
+本轮已经完成 Windows/MSVC 下的聚焦 Xbox 核心编译与单元/合同测试，但没有构建完整 Qt GUI，也没有在 RX 9070 XT、AMD 驱动和真实 Xbox 视频流上做端到端验收。因此不能把 CI 结果表述成“FSR 4 实机已启用”。下一步应在目标机器新建隔离构建目录，确认日志依次出现 Xbox active、FidelityFX optical flow、`fsr-sr provider=4.*` 与 `fsr-fg provider=4.0.*`；若驱动只枚举 3.1，日志必须明确记录回退。

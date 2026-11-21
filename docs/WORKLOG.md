@@ -1662,3 +1662,6 @@ Windows 用 `scripts/acceptance/build-recording-handoff.py --task codex-communit
 ### 2026-11-21 Xbox + RX 9000 FSR 4 路径开始施工
 
 按用户要求在 Veyra 原生 Xbox 串流路径继续实现。修复 Xbox QML 模型错误依赖 Moonlight 构建开关的问题，完整 QML 构建入口现显式开启 Moonlight/Xbox；FSR SR 在 RX 9000 上枚举并锁定 4.x ML provider，不可用才显式回退 3.1，创建后核对真实 provider，避免标签与实际算法不一致。既有 AMD FidelityFX optical flow、FSR4 FG 2X 和引擎回退保留。`git diff --check`、脚本语法、静态构建合同及发行包验证器10项通过；测试临时目录已清理。依当前规则本轮不构建，Linux环境也没有RX 9070 XT/Xbox实机，未宣称Windows编译或实卡通过。完整记录见 [XBOX_AMD_FSR4_2026-11-21.md](XBOX_AMD_FSR4_2026-11-21.md)。未push、未Release、未加入SDK或DLL。
+
+
+补充：用户授权 fork 分支与 CI 后，新增 Windows 2022 聚焦验证，编译/链接生产 Xbox HTTPS、账户、Stream API、WebRTC 会话并执行 loopback、FSR provider 策略与产品构建合同。首轮 run 44893338200 暴露 `libdatachannel` 未启用媒体处理器；按固定 vcpkg 端口定义改用 `libdatachannel[srtp]` 后，run 44894075301 全部通过，同提交 Linux OBS 检查也通过。该结果只覆盖聚焦原生核心，不代表完整 Qt GUI、RX 9070 XT/AMD 驱动 provider 或真实 Xbox 串流实机验收。
